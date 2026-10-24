@@ -57,8 +57,28 @@ class WebUiTests(unittest.TestCase):
         self.assertIn(b'aria-live="polite"', page.data)
         self.assertIn(b'<input type="text" name="MODEL"', page.data)
         self.assertIn(b'name="API_RETRY_COUNT"', page.data)
+        self.assertIn(b'<select name="TARGET_LANG"', page.data)
+        self.assertIn(b'name="WEB_PORT"', page.data)
         self.assertNotIn(b'<select name="MODEL"', page.data)
         self.assertNotIn(b'class="glass"', page.data)
+
+    def test_dashboard_returns_data_only_when_version_changes(self):
+        first = self.client.get("/api/dashboard").get_json()
+        self.assertTrue(first["changed"])
+        self.assertIn("translation_content_logs", first)
+
+        unchanged = self.client.get(f"/api/dashboard?since={first['version']}")
+        self.assertEqual(
+            unchanged.get_json(), {"version": first["version"], "changed": False}
+        )
+
+        web_ui.state.add_log("INFO", "new entry")
+        changed = self.client.get(
+            f"/api/dashboard?since={first['version']}"
+        ).get_json()
+        self.assertTrue(changed["changed"])
+        self.assertEqual(changed["logs"][-1]["message"], "new entry")
+        self.assertEqual(changed["logs"][-1]["id"], changed["version"])
 
     def test_cors_is_not_open_by_default(self):
         response = self.client.get(
