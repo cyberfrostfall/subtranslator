@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -23,8 +24,41 @@ from web_ui import start_web_server, state
 logger = logging.getLogger("SubtitleTranslator")
 
 
+# 任意文字（含 CJK 等），不含数字和下划线
+LETTER_RE = re.compile(r"[^\W\d_]")
+# SRT 用逗号、WebVTT 用点分隔毫秒，WebVTT 还可以省略小时
+SUBTITLE_TIMING_RE = re.compile(r"(?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3}\s*-->")
+ASS_EVENTS_RE = re.compile(r"^\s*\[events\]\s*$", re.IGNORECASE | re.MULTILINE)
+ASS_TAG_RE = re.compile(r"\{[^}]*\}")
+ASS_LEADING_TAGS_RE = re.compile(r"^(?:\{[^}]*\})*")
+ASS_DRAWING_RE = re.compile(r"\\p[1-9]")
+
+
 class SubtitleTranslationError(RuntimeError):
     pass
+
+
+class InvalidResponseError(SubtitleTranslationError):
+    """API 返回了内容，但无法解析成译文"""
+
+
+@dataclass(frozen=True)
+class SubtitleCue:
+    position: int  # 在输出行列表中的位置
+    text: str  # 发送给模型的纯文本
+    original: str  # 无需翻译或翻译失败时原样写回的内容
+    ass_prefix: str = ""  # ASS: Text 字段之前的部分及前导样式标签
+    ass_body: str = ""  # ASS: 前导样式标签之后的原文
+    is_ass: bool = False
+
+    def render(self, translated):
+        """生成双语内容：译文在上，原文在下"""
+        if translated is None:
+            return self.original
+        if self.is_ass:
+            translated_line = "\\N".join(translated.split("\n"))
+            return f"{self.ass_prefix}{translated_line}\\N{self.ass_body}"
+        return f"{translated}\n{self.original}"
 
 
 @dataclass(frozen=True)
@@ -84,6 +118,16 @@ class SubtitleTranslator:
         "ar": "العربية",
         "th": "ไทย",
     }
+    # 目标语言特有的文字，用于判断是否需要翻译、是否已是双语
+    TARGET_SCRIPT_PATTERNS: ClassVar[dict[str, re.Pattern]] = {
+        "zh": re.compile(r"[\u4e00-\u9fff]"),
+        "ja": re.compile(r"[\u3040-\u30ff]"),
+        "ko": re.compile(r"[\uac00-\ud7af]"),
+        "ru": re.compile(r"[\u0400-\u04ff]"),
+        "ar": re.compile(r"[\u0600-\u06ff]"),
+        "th": re.compile(r"[\u0e00-\u0e7f]"),
+    }
+    BATCH_TIMEOUT: ClassVar[int] = 120
 
     def __init__(
         self,
@@ -93,6 +137,7 @@ class SubtitleTranslator:
         max_workers=10,
         target_lang="zh",
         api_retry_count=3,
+        batch_size=30,
     ):
         self.api_key = api_key
         self.proxy_url = proxy_url
@@ -100,6 +145,7 @@ class SubtitleTranslator:
         self.max_workers = max_workers
         self.target_lang = target_lang
         self.api_retry_count = api_retry_count
+        self.batch_size = max(1, batch_size)
         self.target_lang_name = self.LANG_NAMES.get(target_lang, target_lang)
         self.headers = {
             "Content-Type": "application/json",
@@ -111,11 +157,12 @@ class SubtitleTranslator:
         )
         self.thread_local = threading.local()
         logger.info(
-            "初始化翻译器: 模型=%s, 代理URL=%s, 最大并发数=%s, API失败重试次数=%s",
+            "初始化翻译器: 模型=%s, 代理URL=%s, 最大并发数=%s, API失败重试次数=%s, 每批字幕数=%s",
             model,
             "已设置" if proxy_url else "未设置",
             max_workers,
             api_retry_count,
+            self.batch_size,
         )
         state.add_log("INFO", f"翻译器初始化完成: {model}")
 
@@ -130,24 +177,30 @@ class SubtitleTranslator:
             self.thread_local.session = session
         return session
 
+    def _target_script(self):
+        """返回目标语言特有文字的正则；拉丁字母语言无法按文字区分，返回 None"""
+        return self.TARGET_SCRIPT_PATTERNS.get(self.target_lang)
+
     def _is_already_translated(self, content):
-        """检测字幕是否已经是双语格式"""
-        lines = content.strip().split("\n")
-        chinese_count = 0
-        non_chinese_count = 0
+        """检测字幕是否已经是双语格式（同时含目标语言文字和其他文字）"""
+        target_script = self._target_script()
+        if target_script is None:
+            return False
 
-        for line in lines:
-            if "-->" in line or line.strip().isdigit() or not line.strip():
-                continue
-            if re.search(r"[\u4e00-\u9fff]", line):
-                chinese_count += 1
-            elif re.search(r"[a-zA-Z]", line):
-                non_chinese_count += 1
+        target_count = 0
+        other_count = 0
+        cues, _ = self._parse_subtitle(content)
+        for cue in cues:
+            for line in cue.text.split("\n"):
+                if target_script.search(line):
+                    target_count += 1
+                elif LETTER_RE.search(line):
+                    other_count += 1
 
-        total = chinese_count + non_chinese_count
+        total = target_count + other_count
         if total < 4:
             return False
-        return chinese_count >= total * 0.2 and non_chinese_count >= total * 0.2
+        return target_count >= total * 0.2 and other_count >= total * 0.2
 
     def _wait_for_file_stable(self, file_path, timeout=10):
         """等待文件写入完成"""
@@ -171,15 +224,20 @@ class SubtitleTranslator:
 
         return stable_count >= 2
 
-    def translate_subtitle_content(self, content, file_path="unknown"):
-        """翻译字幕内容，保留时间轴格式，使用并发处理，并保留原文（中文在上，原文在下）"""
+    @staticmethod
+    def _parse_subtitle(content):
+        """拆分出输出行和待翻译片段；片段所在行最终由 SubtitleCue.render 填充"""
+        content = content.replace("\r\n", "\n")
+        if ASS_EVENTS_RE.search(content):
+            return SubtitleTranslator._parse_ass(content)
+        return SubtitleTranslator._parse_timed_text(content)
+
+    @staticmethod
+    def _parse_timed_text(content):
+        """解析 SRT / WebVTT：时间轴行之后到空行之前的内容为一个片段"""
         lines = content.strip().split("\n")
         result_lines = []
-
-        text_segments = []
-        segment_positions = []
-        original_texts = []
-        failures = []
+        cues = []
 
         i = 0
         while i < len(lines):
@@ -189,12 +247,11 @@ class SubtitleTranslator:
                 i += 1
                 continue
 
-            if "-->" in line and re.search(r"\d{2}:\d{2}:\d{2},\d{3}", line):
+            if SUBTITLE_TIMING_RE.search(line):
                 result_lines.append(line)
 
                 text_lines = []
                 i += 1
-                start_pos = len(result_lines)
 
                 while (
                     i < len(lines)
@@ -206,12 +263,11 @@ class SubtitleTranslator:
                     i += 1
 
                 if text_lines:
-                    text_to_translate = "\n".join(text_lines)
-                    result_lines.append("PLACEHOLDER")
-
-                    text_segments.append(text_to_translate)
-                    segment_positions.append(start_pos)
-                    original_texts.append(text_to_translate)
+                    text = "\n".join(text_lines)
+                    cues.append(
+                        SubtitleCue(position=len(result_lines), text=text, original=text)
+                    )
+                    result_lines.append(text)
 
                 if i < len(lines) and not lines[i].strip():
                     result_lines.append("")
@@ -220,52 +276,140 @@ class SubtitleTranslator:
                 result_lines.append(line)
                 i += 1
 
-        if text_segments:
-            future_to_index = {
-                self.executor.submit(self.translate_text, text): idx
-                for idx, text in enumerate(text_segments)
-            }
-            translated_texts = [None] * len(text_segments)
+        return cues, result_lines
 
-            for future in as_completed(future_to_index):
-                idx = future_to_index[future]
-                try:
-                    translated_text = future.result()
-                    translated_texts[idx] = translated_text
-                    result_lines[segment_positions[idx]] = (
-                        f"{translated_text}\n{original_texts[idx]}"
-                    )
-                except Exception as exc:  # noqa: BLE001 - future may raise provider errors
-                    logger.error("翻译片段失败: %s", exc)
-                    failures.append(idx)
+    @staticmethod
+    def _parse_ass(content):
+        """解析 ASS / SSA：[Events] 段中的 Dialogue 行，按 Format 定位 Text 字段"""
+        result_lines = []
+        cues = []
+        in_events = False
+        text_index = 9
 
-            failures.sort()
-            for idx in failures:
-                result_lines[segment_positions[idx]] = original_texts[idx]
-                logger.warning(
-                    "片段 %s 重试耗尽，保留原文: %s",
-                    idx + 1,
-                    " ".join(original_texts[idx].split())[:120],
+        for line in content.strip().split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                in_events = stripped.lower() == "[events]"
+            elif in_events and stripped.lower().startswith("format:"):
+                fields = [
+                    field.strip().lower()
+                    for field in stripped.split(":", 1)[1].split(",")
+                ]
+                if "text" in fields:
+                    text_index = fields.index("text")
+            elif in_events and stripped.startswith("Dialogue:"):
+                cue = SubtitleTranslator._parse_ass_dialogue(
+                    line, text_index, len(result_lines)
                 )
+                if cue:
+                    cues.append(cue)
+            result_lines.append(line)
 
-            for original_text, translated_text in zip(
-                original_texts,
-                translated_texts,
-                strict=True,
-            ):
+        return cues, result_lines
+
+    @staticmethod
+    def _parse_ass_dialogue(line, text_index, position):
+        fields = line.split(":", 1)[1].split(",", text_index)
+        if len(fields) <= text_index:
+            return None
+
+        text_field = fields[text_index]
+        # 绘图指令（\p1 等）不是台词
+        if ASS_DRAWING_RE.search(text_field):
+            return None
+
+        leading_tags = ASS_LEADING_TAGS_RE.match(text_field).group(0)
+        body = text_field[len(leading_tags) :]
+        text = (
+            ASS_TAG_RE.sub("", body)
+            .replace("\\N", "\n")
+            .replace("\\n", "\n")
+            .replace("\\h", " ")
+        )
+        text = "\n".join(part.strip() for part in text.split("\n")).strip()
+        if not text:
+            return None
+
+        prefix = line[: len(line) - len(text_field)] + leading_tags
+        return SubtitleCue(
+            position=position,
+            text=text,
+            original=line,
+            ass_prefix=prefix,
+            ass_body=body,
+            is_ass=True,
+        )
+
+    def translate_subtitle_content(
+        self, content, file_path="unknown", on_progress=None
+    ):
+        """按批翻译字幕内容，保留时间轴和样式，译文在上、原文在下。
+
+        每完成一批就记录该批译文，并以 on_progress(已完成批数, 总批数) 报告进度。
+        """
+        cues, result_lines = self._parse_subtitle(content)
+        translations = [None] * len(cues)
+        failures = []
+
+        pending = [
+            idx for idx, cue in enumerate(cues) if self._needs_translation(cue.text)
+        ]
+        batches = [
+            pending[start : start + self.batch_size]
+            for start in range(0, len(pending), self.batch_size)
+        ]
+        future_to_batch = {
+            self.executor.submit(
+                self.translate_batch, [cues[idx].text for idx in batch]
+            ): batch
+            for batch in batches
+        }
+
+        if on_progress:
+            on_progress(0, len(batches))
+        for completed, future in enumerate(as_completed(future_to_batch), start=1):
+            batch = future_to_batch[future]
+            try:
+                batch_translations = future.result()
+            except Exception as exc:  # noqa: BLE001 - future may raise provider errors
+                logger.error("翻译批次失败（%s 个片段）: %s", len(batch), exc)
+                batch_translations = [None] * len(batch)
+            for idx, translated_text in zip(batch, batch_translations):
                 if translated_text is None:
-                    continue
-                state.add_translation_content_log(
-                    file_path=file_path,
-                    original_text=original_text[:100],
-                    translated_text=translated_text[:100],
-                )
+                    failures.append(idx)
+                else:
+                    translations[idx] = translated_text
+            self._log_batch_content(file_path, cues, batch, translations)
+            if on_progress:
+                on_progress(completed, len(batches))
+
+        failures.sort()
+        for idx in failures:
+            logger.warning(
+                "片段 %s 重试耗尽，保留原文: %s",
+                idx + 1,
+                " ".join(cues[idx].text.split())[:120],
+            )
+
+        for cue, translated_text in zip(cues, translations):
+            result_lines[cue.position] = cue.render(translated_text)
 
         return SubtitleTranslationResult(
             content="\n".join(result_lines),
-            total_segments=len(text_segments),
+            total_segments=len(cues),
             failed_indices=tuple(failures),
         )
+
+    @staticmethod
+    def _log_batch_content(file_path, cues, batch, translations):
+        """记录一批译文；日志按最新优先排列，倒序写入让同一批保持字幕顺序"""
+        for idx in reversed(batch):
+            if translations[idx] is not None:
+                state.add_translation_content_log(
+                    file_path=file_path,
+                    original_text=cues[idx].text[:200],
+                    translated_text=translations[idx][:200],
+                )
 
     @staticmethod
     def _api_error_detail(response):
@@ -288,81 +432,172 @@ class SubtitleTranslator:
             normalized = f"{normalized} (request_id={request_id})"
         return normalized[:500]
 
-    def translate_text(self, text, retry_count=None):
-        """调用ChatGPT API翻译文本，带重试机制"""
-        if not self._needs_translation(text):
-            return text
-
-        retries = self.api_retry_count if retry_count is None else retry_count
+    def _chat(self, messages, parse, timeout, retries):
+        """发送聊天请求并解析回复；HTTP 错误和响应格式错误都按指数退避重试"""
         total_attempts = retries + 1
         for attempt in range(total_attempts):
             try:
                 payload = {
                     "model": self.model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": f"你是一个专业的字幕翻译专家。请将以下字幕翻译成{self.target_lang_name}，保持原意的同时使翻译自然流畅。不要添加任何解释或额外内容。",
-                        },
-                        {
-                            "role": "user",
-                            "content": f"翻译以下字幕内容为{self.target_lang_name}:\n{text}",
-                        },
-                    ],
+                    "messages": messages,
                     "temperature": 0.3,
                 }
-
                 response = self._get_session().post(
-                    self.proxy_url, json=payload, timeout=30
+                    self.proxy_url, json=payload, timeout=timeout
                 )
 
-                if response.status_code == 200:
-                    result = response.json()
-                    try:
-                        translated_text = result["choices"][0]["message"][
-                            "content"
-                        ].strip()
-                    except (KeyError, IndexError, TypeError, AttributeError) as exc:
-                        raise SubtitleTranslationError("API 响应格式不正确") from exc
-                    return translated_text
-                else:
+                if response.status_code != 200:
                     detail = self._api_error_detail(response)
-                    logger.warning(
-                        "API 返回错误 %s: %s，尝试 %s/%s",
-                        response.status_code,
-                        detail,
-                        attempt + 1,
-                        total_attempts,
+                    raise SubtitleTranslationError(
+                        f"API 错误 {response.status_code}: {detail}"
                     )
-                    if attempt < total_attempts - 1:
-                        time.sleep(2**attempt)  # 指数退避
-                    else:
-                        raise SubtitleTranslationError(
-                            f"API 错误 {response.status_code}: {detail}"
-                        )
-            except Exception as e:
-                if attempt < total_attempts - 1:
-                    logger.warning(
-                        "翻译失败，尝试 %s/%s: %s",
-                        attempt + 1,
-                        total_attempts,
-                        e,
-                    )
-                    time.sleep(2**attempt)
-                else:
-                    raise
 
-        return text
+                try:
+                    reply = response.json()["choices"][0]["message"]["content"]
+                    reply = reply.strip()
+                except (
+                    KeyError,
+                    IndexError,
+                    TypeError,
+                    AttributeError,
+                    ValueError,
+                ) as exc:
+                    raise InvalidResponseError("API 响应格式不正确") from exc
+                return parse(reply)
+            except Exception as exc:
+                if attempt == total_attempts - 1:
+                    raise
+                logger.warning(
+                    "API 请求失败，尝试 %s/%s: %s",
+                    attempt + 1,
+                    total_attempts,
+                    exc,
+                )
+                time.sleep(2**attempt)  # 指数退避
+
+        raise SubtitleTranslationError("API 请求未执行")
+
+    def translate_batch(self, texts):
+        """一次请求翻译多条连续字幕，返回与 texts 等长的列表，None 表示该条失败。
+
+        整批请求失败时抛出异常；响应无法解析或缺少条目时，缺失的条目逐条补译。
+        """
+        if len(texts) == 1:
+            return [self.translate_text(texts[0])]
+
+        items = [{"id": idx, "text": text} for idx, text in enumerate(texts)]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一个专业的字幕翻译专家。用户会发送一个 JSON 数组，"
+                    "每个元素包含 id 和 text，是同一部影片中按时间顺序排列的连续字幕。"
+                    f"请把每条 text 翻译成{self.target_lang_name}，"
+                    "结合上下文让译文自然流畅，人名、称谓和术语前后一致。"
+                    '只返回 JSON 数组，格式为 [{"id": 0, "text": "译文"}]：'
+                    "每个 id 对应一条译文，不要合并、拆分或遗漏条目，"
+                    "text 中的换行保留为换行，不要添加任何解释或额外内容。"
+                ),
+            },
+            {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
+        ]
+
+        try:
+            translated = self._chat(
+                messages,
+                parse=lambda reply: self._parse_batch_reply(reply, len(texts)),
+                timeout=self.BATCH_TIMEOUT,
+                retries=self.api_retry_count,
+            )
+        except InvalidResponseError as exc:
+            logger.warning("批量翻译响应无法解析，改为逐条翻译: %s", exc)
+            translated = {}
+
+        missing = [idx for idx in range(len(texts)) if idx not in translated]
+        if missing and translated:
+            logger.warning(
+                "批量翻译响应缺少 %s/%s 条，逐条补译", len(missing), len(texts)
+            )
+        for idx in missing:
+            try:
+                translated[idx] = self.translate_text(texts[idx])
+            except Exception as exc:  # noqa: BLE001 - keep other cues of the batch
+                logger.error("逐条补译失败: %s", exc)
+                translated[idx] = None
+
+        return [translated[idx] for idx in range(len(texts))]
+
+    @staticmethod
+    def _parse_batch_reply(reply, count):
+        """解析模型返回的 [{"id": n, "text": "..."}]，容忍代码块包裹和多余文字"""
+        start, end = reply.find("["), reply.rfind("]")
+        if start == -1 or end < start:
+            raise InvalidResponseError("响应中没有 JSON 数组")
+        try:
+            items = json.loads(reply[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise InvalidResponseError(f"JSON 解析失败: {exc}") from exc
+        if not isinstance(items, list):
+            raise InvalidResponseError("响应不是 JSON 数组")
+
+        translated = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            idx, text = item.get("id"), item.get("text")
+            if isinstance(idx, str) and idx.isdigit():
+                idx = int(idx)
+            if (
+                isinstance(idx, int)
+                and 0 <= idx < count
+                and isinstance(text, str)
+                and text.strip()
+            ):
+                translated[idx] = text.strip()
+
+        if not translated:
+            raise InvalidResponseError("响应中没有有效的译文条目")
+        return translated
+
+    def translate_text(self, text, retry_count=None):
+        """单条翻译：用于只有一条的批次和批量响应中缺失条目的补译"""
+        if not self._needs_translation(text):
+            return text
+
+        retries = self.api_retry_count if retry_count is None else retry_count
+        messages = [
+            {
+                "role": "system",
+                "content": f"你是一个专业的字幕翻译专家。请将以下字幕翻译成{self.target_lang_name}，保持原意的同时使翻译自然流畅。不要添加任何解释或额外内容。",
+            },
+            {
+                "role": "user",
+                "content": f"翻译以下字幕内容为{self.target_lang_name}:\n{text}",
+            },
+        ]
+        return self._chat(messages, parse=lambda reply: reply, timeout=30, retries=retries)
 
     def _needs_translation(self, text):
         """检查文本是否需要翻译"""
-        chinese_chars = re.findall(r"[\u4e00-\u9fff]", text)
-        return len(chinese_chars) < len(text) * 0.3
+        # 纯数字、符号或音符等没有文字的片段原样保留
+        if not LETTER_RE.search(text):
+            return False
+        target_script = self._target_script()
+        if target_script is None:
+            return True
+        return len(target_script.findall(text)) < len(text) * 0.3
 
     def translate_subtitle_file(self, file_path):
         """翻译字幕文件"""
         state.increment_stat("in_progress")
         try:
+            # 文件名已带目标语言标识时输出路径就是源文件本身，翻译会覆盖原文
+            output_path = self._generate_output_path(file_path)
+            if Path(output_path).resolve() == Path(file_path).resolve():
+                logger.info("文件名已带目标语言标识，跳过: %s", file_path)
+                state.add_file(file_path, "success", "已是目标语言字幕")
+                return True
+
             logger.info(f"开始处理字幕文件: {file_path}")
             state.add_log("INFO", f"开始翻译: {file_path}")
             state.add_translation_log(file_path, "starting", "等待文件稳定...", 0)
@@ -391,8 +626,18 @@ class SubtitleTranslator:
             state.add_translation_log(
                 file_path, "translating", "正在调用 API 翻译...", 30
             )
+            def report_progress(completed, total):
+                # API 翻译阶段占进度条的 30%–80%
+                progress = 30 + (50 * completed // total if total else 50)
+                state.add_translation_log(
+                    file_path,
+                    "translating",
+                    f"正在翻译：已完成 {completed}/{total} 批",
+                    progress,
+                )
+
             translation_result = self.translate_subtitle_content(
-                content, file_path=file_path
+                content, file_path=file_path, on_progress=report_progress
             )
 
             if (
@@ -408,9 +653,6 @@ class SubtitleTranslator:
             state.add_translation_log(
                 file_path, "translating", "翻译完成，保存文件...", 80
             )
-            # 智能生成输出文件名：移除语言标识（如 .en），添加 .zh
-            output_path = self._generate_output_path(file_path)
-
             source_mode = stat.S_IMODE(Path(file_path).stat().st_mode)
             self._atomic_write(
                 output_path,
@@ -576,8 +818,7 @@ class SubtitleEventHandler(FileSystemEventHandler):
     def _schedule_file(self, file_path, delay=2):
         if not any(file_path.lower().endswith(ext) for ext in self.subtitle_extensions):
             return
-        # 保留现有语言跳过逻辑；多目标语言逻辑不在本次修改范围。
-        if ".zh." in file_path:
+        if self._is_translated_output(file_path):
             logger.debug("跳过已翻译文件: %s", file_path)
             return
 
@@ -608,7 +849,7 @@ class SubtitleEventHandler(FileSystemEventHandler):
                 return
 
             # 跳过已翻译的文件
-            if ".zh." in file_path:
+            if self._is_translated_output(file_path):
                 self.pending_files.pop(file_path, None)
                 return
 
@@ -643,6 +884,12 @@ class SubtitleEventHandler(FileSystemEventHandler):
                 file_path,
             )
             self._schedule_file(file_path, delay=retry_delay)
+
+    def _is_translated_output(self, file_path):
+        """本服务生成的文件名形如 name.<目标语言>.<扩展名>"""
+        target_lang = getattr(self.translator, "target_lang", "zh").lower()
+        stem = os.path.splitext(os.path.basename(file_path))[0].lower()
+        return stem.endswith(f".{target_lang}")
 
     def _cleanup_processed_locked(self):
         now = time.time()

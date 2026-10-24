@@ -37,6 +37,8 @@ class AppState:
         self.max_log_age_hours = 24
         self.lock = threading.Lock()
         self.health_checker = None
+        # 每次数据变化加一，前端据此判断是否需要重新渲染
+        self.version = 0
 
     def add_log(self, level, message):
         with self.lock:
@@ -45,6 +47,8 @@ class AppState:
                 "level": level,
                 "message": message,
             }
+            self.version += 1
+            log_entry["id"] = self.version
             self.logs.append(log_entry)
 
             # 清理过期日志
@@ -89,6 +93,7 @@ class AppState:
                 }
                 self.translation_logs.insert(0, log_entry)
 
+            self.version += 1
             # 限制数量
             if len(self.translation_logs) > self.max_translation_logs:
                 self.translation_logs = self.translation_logs[
@@ -104,6 +109,8 @@ class AppState:
                 "translated": translated_text,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
+            self.version += 1
+            log_entry["id"] = self.version
             self.translation_content_logs.insert(0, log_entry)
 
             # 限制数量
@@ -121,6 +128,7 @@ class AppState:
                 "timestamp": datetime.now(UTC).isoformat(),
             }
             self.recent_files.insert(0, file_entry)
+            self.version += 1
             if len(self.recent_files) > 100:
                 self.recent_files = self.recent_files[:100]
 
@@ -128,16 +136,35 @@ class AppState:
         with self.lock:
             if key in self.stats:
                 self.stats[key] = value
+                self.version += 1
 
     def increment_stat(self, key):
         with self.lock:
             if key in self.stats:
                 self.stats[key] += 1
+                self.version += 1
 
     def decrement_stat(self, key):
         with self.lock:
             if key in self.stats:
                 self.stats[key] = max(0, self.stats[key] - 1)
+                self.version += 1
+
+    def snapshot(self, since=None, log_limit=200, content_limit=200):
+        """返回仪表盘所需的全部数据；since 等于当前版本时只返回版本号"""
+        with self.lock:
+            if since == self.version:
+                return {"version": self.version, "changed": False}
+            return {
+                "version": self.version,
+                "changed": True,
+                "stats": dict(self.stats),
+                "translation_logs": list(self.translation_logs),
+                "translation_content_logs": self.translation_content_logs[
+                    :content_limit
+                ],
+                "logs": self.logs[-log_limit:],
+            }
 
     def set_health_checker(self, checker):
         with self.lock:
@@ -163,6 +190,14 @@ def health():
     if state.is_healthy():
         return jsonify({"status": "healthy"}), 200
     return jsonify({"status": "starting_or_unhealthy"}), 503
+
+
+@app.route("/api/dashboard")
+def get_dashboard():
+    since = request.args.get("since", type=int)
+    response = jsonify(state.snapshot(since=since))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/stats")

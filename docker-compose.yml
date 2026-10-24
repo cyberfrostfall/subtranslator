@@ -24,7 +24,7 @@ services:
       - ${MEDIA_PATH:-/mnt/user/media}:/mnt/user/media
 
     ports:
-      - "${WEB_PORT:-8095}:8095"
+      - "${WEB_PORT:-8095}:${WEB_PORT:-8095}"
 
     logging:
       driver: "json-file"
@@ -33,7 +33,7 @@ services:
         max-file: "3"
 
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8095/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; from config_manager import load_config; urllib.request.urlopen('http://localhost:%s/health' % load_config()['WEB_PORT'], timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

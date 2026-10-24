@@ -37,7 +37,7 @@ EXPOSE 8095
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8095/health', timeout=5)"
+    CMD ["python", "-c", "import urllib.request; from config_manager import load_config; urllib.request.urlopen('http://localhost:%s/health' % load_config()['WEB_PORT'], timeout=5)"]
 
 # 运行应用（使用 root 用户避免权限问题）
 CMD ["python", "subtranslator.py"]

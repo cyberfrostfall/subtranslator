@@ -17,35 +17,6 @@
 </head>
 <body>
     <svg class="icon-sprite" aria-hidden="true">
-        <symbol id="icon-subtitles" viewBox="0 0 24 24">
-            <rect x="3" y="5" width="18" height="14" rx="2"></rect>
-            <path d="M7 11h4M7 15h6M15 11h2M15 15h2"></path>
-        </symbol>
-        <symbol id="icon-check" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="9"></circle>
-            <path d="m8 12 2.5 2.5L16 9"></path>
-        </symbol>
-        <symbol id="icon-alert" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="9"></circle>
-            <path d="M12 8v5M12 16.5h.01"></path>
-        </symbol>
-        <symbol id="icon-loader" viewBox="0 0 24 24">
-            <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
-        </symbol>
-        <symbol id="icon-clock" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="9"></circle>
-            <path d="M12 7v5l3 2"></path>
-        </symbol>
-        <symbol id="icon-list" viewBox="0 0 24 24">
-            <path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"></path>
-        </symbol>
-        <symbol id="icon-text" viewBox="0 0 24 24">
-            <path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"></path>
-        </symbol>
-        <symbol id="icon-terminal" viewBox="0 0 24 24">
-            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-            <path d="m7 9 3 3-3 3M13 15h4"></path>
-        </symbol>
         <symbol id="icon-sun" viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="4"></circle>
             <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
@@ -60,161 +31,177 @@
         <symbol id="icon-close" viewBox="0 0 24 24">
             <path d="m6 6 12 12M18 6 6 18"></path>
         </symbol>
-        <symbol id="icon-inbox" viewBox="0 0 24 24">
-            <path d="M4 5h16l2 9v5H2v-5l2-9Z"></path>
-            <path d="M2 14h5l2 3h6l2-3h5"></path>
-        </symbol>
     </svg>
 
-    <div class="app-shell">
-        <header class="app-header">
-            <a class="brand" href="/" aria-label="SubTranslator 首页">
-                <span class="brand-mark"><svg><use href="#icon-subtitles"></use></svg></span>
-                <span>
-                    <strong>SubTranslator</strong>
-                    <small>实时字幕翻译监控</small>
-                </span>
-            </a>
-            <div class="header-actions">
-                <div class="connection-state" id="connection-state" data-state="checking" role="status" aria-live="polite">
-                    <span class="status-dot" aria-hidden="true"></span>
-                    <span id="connection-label">正在连接</span>
-                </div>
-                <button class="icon-button theme-toggle" id="theme-toggle" type="button" aria-label="切换深色主题" title="切换主题">
-                    <svg class="theme-icon theme-icon-sun"><use href="#icon-sun"></use></svg>
-                    <svg class="theme-icon theme-icon-moon"><use href="#icon-moon"></use></svg>
-                </button>
-                <button class="icon-button" id="config-button" type="button" aria-label="打开配置" title="配置">
-                    <svg><use href="#icon-settings"></use></svg>
-                </button>
+    <header class="app-header">
+        <a class="brand" href="/" aria-label="SubTranslator 首页">
+            <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+            <span class="brand-name">SubTranslator</span>
+        </a>
+        <div class="header-actions">
+            <div class="connection-state" id="connection-state" data-state="checking" role="status" aria-live="polite">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="connection-label">正在连接</span>
             </div>
-        </header>
+            <button class="icon-button" id="theme-toggle" type="button" aria-label="切换深色主题" title="切换主题">
+                <svg class="theme-icon theme-icon-sun"><use href="#icon-sun"></use></svg>
+                <svg class="theme-icon theme-icon-moon"><use href="#icon-moon"></use></svg>
+            </button>
+            <button class="icon-button" id="config-button" type="button" aria-label="打开配置" title="配置">
+                <svg><use href="#icon-settings"></use></svg>
+            </button>
+        </div>
+    </header>
 
-        <main class="dashboard">
-            <section class="stats-grid" aria-label="运行概览">
-                <article class="stat-card" data-tone="success">
-                    <div class="stat-heading"><span class="stat-icon"><svg><use href="#icon-check"></use></svg></span><span>翻译成功</span></div>
-                    <strong class="stat-value" id="stat-success">0</strong>
-                    <span class="stat-caption">累计完成文件</span>
-                </article>
-                <article class="stat-card" data-tone="danger">
-                    <div class="stat-heading"><span class="stat-icon"><svg><use href="#icon-alert"></use></svg></span><span>翻译失败</span></div>
-                    <strong class="stat-value" id="stat-failed">0</strong>
-                    <span class="stat-caption">需要检查任务</span>
-                </article>
-                <article class="stat-card" data-tone="primary">
-                    <div class="stat-heading"><span class="stat-icon"><svg><use href="#icon-loader"></use></svg></span><span>正在处理</span></div>
-                    <strong class="stat-value" id="stat-progress">0</strong>
-                    <span class="stat-caption">当前活动任务</span>
-                </article>
-                <article class="stat-card" data-tone="neutral">
-                    <div class="stat-heading"><span class="stat-icon"><svg><use href="#icon-clock"></use></svg></span><span>运行时长</span></div>
-                    <strong class="stat-value stat-value-time" id="stat-uptime">0h 0m</strong>
-                    <span class="stat-caption">本次服务周期</span>
-                </article>
+    <main class="dashboard">
+        <section class="stats" aria-label="运行概览">
+            <button class="stat" type="button" data-filter="active" data-tone="active">
+                <span class="stat-label">进行中</span>
+                <strong class="stat-value" id="stat-progress">0</strong>
+            </button>
+            <button class="stat" type="button" data-filter="done" data-tone="success">
+                <span class="stat-label">已完成</span>
+                <strong class="stat-value" id="stat-success">0</strong>
+            </button>
+            <button class="stat" type="button" data-filter="failed" data-tone="danger">
+                <span class="stat-label">失败</span>
+                <strong class="stat-value" id="stat-failed">0</strong>
+            </button>
+            <div class="stat stat-static">
+                <span class="stat-label">运行时长</span>
+                <strong class="stat-value" id="stat-uptime">0h 0m</strong>
+            </div>
+        </section>
+
+        <div class="workspace">
+            <section class="panel tasks-panel" aria-labelledby="tasks-title">
+                <header class="panel-header">
+                    <h2 id="tasks-title">任务</h2>
+                    <div class="segmented" role="group" aria-label="筛选任务" id="task-filter">
+                        <button type="button" data-filter="all" aria-pressed="true">全部 <span data-count="all">0</span></button>
+                        <button type="button" data-filter="active" aria-pressed="false">进行中 <span data-count="active">0</span></button>
+                        <button type="button" data-filter="failed" aria-pressed="false">失败 <span data-count="failed">0</span></button>
+                    </div>
+                </header>
+                <div class="panel-body task-list" id="translation-progress-list" data-filter="all" aria-live="polite">
+                    <div class="placeholder"><span class="spinner" aria-hidden="true"></span>正在加载任务</div>
+                </div>
             </section>
 
-            <div class="dashboard-grid">
-                <section class="panel tasks-panel">
-                    <div class="panel-header">
-                        <div>
-                            <div class="panel-title"><svg><use href="#icon-list"></use></svg><h2>任务队列</h2></div>
-                            <p>当前字幕文件的翻译进度</p>
-                        </div>
-                        <span class="panel-meta">实时更新</span>
-                    </div>
-                    <div class="panel-content" id="translation-progress-list" aria-live="polite">
-                        <div class="empty-state"><span class="loading-spinner" aria-hidden="true"></span><p>正在加载任务</p></div>
-                    </div>
-                </section>
+            <section class="panel feed-panel" aria-labelledby="feed-title">
+                <header class="panel-header">
+                    <h2 id="feed-title">实时译文</h2>
+                    <span class="panel-meta" id="feed-meta">最新在上</span>
+                </header>
+                <div class="panel-body feed" id="translation-content-list" aria-live="polite">
+                    <div class="placeholder"><span class="spinner" aria-hidden="true"></span>正在加载译文</div>
+                </div>
+            </section>
 
-                <section class="panel content-panel">
-                    <div class="panel-header">
-                        <div>
-                            <div class="panel-title"><svg><use href="#icon-text"></use></svg><h2>翻译内容</h2></div>
-                            <p>最近生成的字幕对照</p>
-                        </div>
-                        <span class="panel-meta">最新优先</span>
+            <section class="panel logs-panel" aria-labelledby="logs-title">
+                <header class="panel-header">
+                    <h2 id="logs-title">系统日志</h2>
+                    <div class="segmented" role="group" aria-label="筛选日志级别" id="log-filter">
+                        <button type="button" data-filter="all" aria-pressed="true">全部</button>
+                        <button type="button" data-filter="warning" aria-pressed="false">警告及以上</button>
+                        <button type="button" data-filter="error" aria-pressed="false">仅错误</button>
                     </div>
-                    <div class="panel-content" id="translation-content-list" aria-live="polite">
-                        <div class="empty-state"><span class="loading-spinner" aria-hidden="true"></span><p>正在加载内容</p></div>
-                    </div>
-                </section>
-
-                <section class="panel logs-panel">
-                    <div class="panel-header">
-                        <div>
-                            <div class="panel-title"><svg><use href="#icon-terminal"></use></svg><h2>系统日志</h2></div>
-                            <p>服务运行与错误信息</p>
-                        </div>
-                        <span class="panel-meta">最近 200 条</span>
-                    </div>
-                    <div class="panel-content log-list" id="log-list" aria-live="polite">
-                        <div class="empty-state"><span class="loading-spinner" aria-hidden="true"></span><p>正在加载日志</p></div>
-                    </div>
-                </section>
-            </div>
-        </main>
-    </div>
+                </header>
+                <div class="panel-body log-list" id="log-list" data-filter="all" aria-live="polite">
+                    <div class="placeholder"><span class="spinner" aria-hidden="true"></span>正在加载日志</div>
+                </div>
+            </section>
+        </div>
+    </main>
 
     <div class="modal" id="config-modal" role="dialog" aria-modal="true" aria-labelledby="config-title" aria-hidden="true">
         <div class="modal-content">
             <div class="modal-header">
                 <div>
-                    <h2 id="config-title">配置管理</h2>
+                    <h2 id="config-title">配置</h2>
                     <p>保存后需重启容器才能生效</p>
                 </div>
-                <button class="icon-button close-button" id="close-config-button" type="button" aria-label="关闭配置">
+                <button class="icon-button" id="close-config-button" type="button" aria-label="关闭配置">
                     <svg><use href="#icon-close"></use></svg>
                 </button>
             </div>
             <div id="config-alert" class="alert" role="status" aria-live="polite"></div>
             <form class="config-form" id="config-form">
-                <div class="form-group form-group-wide">
-                    <label for="api-key">API Key <span aria-hidden="true">*</span></label>
-                    <input type="password" name="API_KEY" id="api-key" placeholder="sk-..." autocomplete="off">
-                    <small>填写所用 API 服务的密钥；留空则保留现有密钥</small>
-                </div>
-                <div class="form-group form-group-wide">
-                    <label for="proxy-url">API 端点 <span aria-hidden="true">*</span></label>
-                    <input type="url" name="PROXY_URL" id="proxy-url" placeholder="请输入完整的 HTTP(S) API 地址" required>
-                    <small>无默认端点，请填写所用服务的完整请求地址</small>
-                </div>
-                <div class="form-group">
-                    <label for="model">模型 <span aria-hidden="true">*</span></label>
-                    <input type="text" name="MODEL" id="model" placeholder="请输入模型名称" autocomplete="off" required>
-                </div>
-                <div class="form-group">
-                    <label for="max-workers">最大并发数</label>
-                    <input type="number" name="MAX_WORKERS" id="max-workers" value="10" min="1" max="50">
-                </div>
-                <div class="form-group">
-                    <label for="api-retry-count">API 失败重试次数</label>
-                    <input type="number" name="API_RETRY_COUNT" id="api-retry-count" value="3" min="0" max="10">
-                    <small>仅重试失败片段；不包含首次请求</small>
-                </div>
-                <div class="form-group form-group-wide">
-                    <label for="movies-dir">电影目录</label>
-                    <input type="text" name="MOVIES_DIR" id="movies-dir" placeholder="/mnt/user/media/media/movies">
-                </div>
-                <div class="form-group form-group-wide">
-                    <label for="tv-dir">电视剧目录</label>
-                    <input type="text" name="TV_DIR" id="tv-dir" placeholder="/mnt/user/media/media/tv">
-                </div>
-                <div class="form-group form-group-wide">
-                    <label for="custom-dirs">自定义监控目录</label>
-                    <input type="text" name="CUSTOM_DIRS" id="custom-dirs" placeholder="/path1,/path2">
-                    <small>多个目录用英文逗号分隔</small>
-                </div>
-                <div class="form-group">
-                    <label for="log-level">日志级别</label>
-                    <select name="LOG_LEVEL" id="log-level">
-                        <option value="DEBUG">DEBUG</option>
-                        <option value="INFO" selected>INFO</option>
-                        <option value="WARNING">WARNING</option>
-                        <option value="ERROR">ERROR</option>
-                    </select>
-                </div>
+                <fieldset>
+                    <legend>翻译服务</legend>
+                    <div class="form-group form-group-wide">
+                        <label for="api-key">API Key <span aria-hidden="true">*</span></label>
+                        <input type="password" name="API_KEY" id="api-key" placeholder="sk-..." autocomplete="off">
+                        <small>留空则保留现有密钥</small>
+                    </div>
+                    <div class="form-group form-group-wide">
+                        <label for="proxy-url">API 端点 <span aria-hidden="true">*</span></label>
+                        <input type="url" name="PROXY_URL" id="proxy-url" placeholder="https://.../v1/chat/completions" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="model">模型 <span aria-hidden="true">*</span></label>
+                        <input type="text" name="MODEL" id="model" placeholder="请输入模型名称" autocomplete="off" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="target-lang">目标语言</label>
+                        <select name="TARGET_LANG" id="target-lang">
+                            <option value="zh">中文</option>
+                            <option value="en">English</option>
+                            <option value="ja">日本語</option>
+                            <option value="ko">한국어</option>
+                            <option value="fr">Français</option>
+                            <option value="de">Deutsch</option>
+                            <option value="es">Español</option>
+                            <option value="it">Italiano</option>
+                            <option value="pt">Português</option>
+                            <option value="ru">Русский</option>
+                            <option value="ar">العربية</option>
+                            <option value="th">ไทย</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="max-workers">最大并发请求数</label>
+                        <input type="number" name="MAX_WORKERS" id="max-workers" value="10" min="1" max="50">
+                    </div>
+                    <div class="form-group">
+                        <label for="api-retry-count">API 失败重试次数</label>
+                        <input type="number" name="API_RETRY_COUNT" id="api-retry-count" value="3" min="0" max="10">
+                        <small>不包含首次请求</small>
+                    </div>
+                </fieldset>
+                <fieldset>
+                    <legend>监控目录</legend>
+                    <div class="form-group form-group-wide">
+                        <label for="movies-dir">电影目录</label>
+                        <input type="text" name="MOVIES_DIR" id="movies-dir" placeholder="/mnt/user/media/media/movies">
+                    </div>
+                    <div class="form-group form-group-wide">
+                        <label for="tv-dir">电视剧目录</label>
+                        <input type="text" name="TV_DIR" id="tv-dir" placeholder="/mnt/user/media/media/tv">
+                    </div>
+                    <div class="form-group form-group-wide">
+                        <label for="custom-dirs">自定义监控目录</label>
+                        <input type="text" name="CUSTOM_DIRS" id="custom-dirs" placeholder="/path1,/path2">
+                        <small>多个目录用英文逗号分隔</small>
+                    </div>
+                </fieldset>
+                <fieldset>
+                    <legend>服务</legend>
+                    <div class="form-group">
+                        <label for="web-port">Web 端口</label>
+                        <input type="number" name="WEB_PORT" id="web-port" value="8095" min="1" max="65535">
+                        <small>Docker 端口映射需同步修改</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="log-level">日志级别</label>
+                        <select name="LOG_LEVEL" id="log-level">
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="INFO" selected>INFO</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                    </div>
+                </fieldset>
                 <div class="form-actions">
                     <button type="button" class="button button-secondary" id="cancel-config-button">取消</button>
                     <button type="submit" class="button button-primary">保存配置</button>
