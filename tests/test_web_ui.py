@@ -1,10 +1,23 @@
 import os
 import tempfile
 import unittest
+from html.parser import HTMLParser
 from pathlib import Path
+from struct import unpack_from
 from unittest.mock import patch
 
 import web_ui
+
+
+class IconLinks(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "link" and attributes.get("rel") in ("icon", "apple-touch-icon"):
+            self.links.append(attributes)
 
 
 class WebUiTests(unittest.TestCase):
@@ -62,6 +75,36 @@ class WebUiTests(unittest.TestCase):
         self.assertIn(b'name="WEB_PORT"', page.data)
         self.assertNotIn(b'<select name="MODEL"', page.data)
         self.assertNotIn(b'class="glass"', page.data)
+
+    def test_favicon_serves_real_multisize_ico(self):
+        with self.client.get("/favicon.ico") as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(response.mimetype, ("image/vnd.microsoft.icon", "image/x-icon"))
+            reserved, image_type, count = unpack_from("<HHH", response.data)
+            self.assertEqual((reserved, image_type), (0, 1))
+            sizes = set()
+            for index in range(count):
+                offset = 6 + 16 * index
+                width, height = unpack_from("BB", response.data, offset)
+                size, position = unpack_from("<II", response.data, offset + 8)
+                self.assertGreater(size, 0)
+                self.assertLessEqual(position + size, len(response.data))
+                sizes.add((width, height))
+            self.assertTrue({(16, 16), (32, 32), (48, 48)} <= sizes)
+
+    def test_page_provides_working_raster_icons_for_safari(self):
+        parser = IconLinks()
+        parser.feed(self.client.get("/").get_data(as_text=True))
+        png_sizes = set()
+        for link in parser.links:
+            with self.client.get(link["href"]) as response:
+                self.assertEqual(response.status_code, 200, link["href"])
+                if response.mimetype == "image/png":
+                    self.assertEqual(response.data[:8], b"\x89PNG\r\n\x1a\n")
+                    dimensions = unpack_from(">II", response.data, 16)
+                    png_sizes.add((link["rel"], dimensions))
+        self.assertIn(("icon", (32, 32)), png_sizes)
+        self.assertIn(("apple-touch-icon", (180, 180)), png_sizes)
 
     def test_dashboard_returns_data_only_when_version_changes(self):
         first = self.client.get("/api/dashboard").get_json()
