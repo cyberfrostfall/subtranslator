@@ -12,6 +12,8 @@
             document.documentElement.dataset.theme = theme;
         })();
     </script>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <meta name="theme-color" content="#1d1c19">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
 </head>
@@ -35,7 +37,7 @@
 
     <header class="app-header">
         <a class="brand" href="/" aria-label="SubTranslator 首页">
-            <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+            <img class="brand-mark" src="{{ url_for('static', filename='favicon.svg') }}" alt="" width="32" height="32">
             <span class="brand-name">SubTranslator</span>
         </a>
         <div class="header-actions">
