@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>SubTranslator</title>
+  <!-- 屏幕 -->
+  <rect x="4" y="10" width="56" height="44" rx="11" fill="#1d1c19"/>
+  <rect x="4.75" y="10.75" width="54.5" height="42.5" rx="10.25" fill="none" stroke="#3a3830" stroke-width="1.5"/>
+  <!-- 双语字幕：译文在上（字幕黄），原文在下 -->
+  <rect x="15" y="33" width="34" height="5" rx="2.5" fill="#f2c94c"/>
+  <rect x="21" y="42" width="22" height="4" rx="2" fill="#a8a294"/>
+</svg>

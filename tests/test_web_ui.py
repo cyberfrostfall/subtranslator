@@ -53,6 +53,7 @@ class WebUiTests(unittest.TestCase):
 
         self.assertEqual(page.status_code, 200)
         self.assertIn(b'id="theme-toggle"', page.data)
+        self.assertIn(b'rel="icon"', page.data)
         self.assertIn(b'role="dialog"', page.data)
         self.assertIn(b'aria-live="polite"', page.data)
         self.assertIn(b'<input type="text" name="MODEL"', page.data)

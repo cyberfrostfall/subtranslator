@@ -130,37 +130,10 @@ svg {
     text-decoration: none;
 }
 
-/* 品牌标识：一块屏幕上的两行字幕 */
 .brand-mark {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 3px;
-    width: 30px;
-    height: 24px;
-    padding-bottom: 5px;
-    border-radius: 6px;
-    background: var(--ink);
-}
-
-:root[data-theme="dark"] .brand-mark {
-    background: #26282d;
-}
-
-.brand-mark span {
-    height: 2.5px;
-    border-radius: 2px;
-    background: var(--subtitle);
-}
-
-.brand-mark span:first-child {
-    width: 18px;
-}
-
-.brand-mark span:last-child {
-    width: 12px;
-    opacity: 0.65;
+    display: block;
+    width: 32px;
+    height: 32px;
 }
 
 .brand-name {
