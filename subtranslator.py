@@ -34,6 +34,53 @@ ASS_LEADING_TAGS_RE = re.compile(r"^(?:\{[^}]*\})*")
 ASS_DRAWING_RE = re.compile(r"\\p[1-9]")
 
 
+# 文件名中各目标语言的常见标签写法，例如 movie.chs.srt、movie.zh-CN.srt
+LANGUAGE_TAG_ALIASES = {
+    "zh": {"zh", "chs", "cht", "chi", "zho", "sc", "tc", "cn", "gb", "big5",
+           "zh-cn", "zh-hans", "zh-sg", "zh-tw", "zh-hant", "zh-hk"},
+    "en": {"en", "eng", "en-us", "en-gb"},
+    "ja": {"ja", "jp", "jpn"},
+    "ko": {"ko", "kor"},
+    "fr": {"fr", "fre", "fra"},
+    "de": {"de", "ger", "deu"},
+    "es": {"es", "spa", "es-419"},
+    "it": {"it", "ita"},
+    "pt": {"pt", "por", "pt-br", "pt-pt"},
+    "ru": {"ru", "rus"},
+    "ar": {"ar", "ara"},
+    "th": {"th", "tha"},
+}
+# 不作为目标语言、但会出现在文件名里的语言
+OTHER_LANGUAGE_TAGS = {"vi"}
+# 语言之外的附加标签：听障（hi/sdh/cc）、强制字幕等
+SUBTITLE_FLAG_TAGS = {"hi", "sdh", "cc", "forced", "default", "full"}
+KNOWN_SUBTITLE_TAGS = SUBTITLE_FLAG_TAGS.union(
+    OTHER_LANGUAGE_TAGS, *LANGUAGE_TAG_ALIASES.values()
+)
+
+
+def split_subtitle_name(file_path):
+    """拆出 (去掉标签后的路径, 文件名末尾的标签列表, 扩展名)。
+
+    movie.zh.hi.srt -> ("movie", ["zh", "hi"], ".srt")
+    """
+    base, ext = os.path.splitext(file_path)
+    tags = []
+    directory, name = os.path.split(base)
+    parts = name.split(".")
+    while len(parts) > 1 and parts[-1].lower() in KNOWN_SUBTITLE_TAGS:
+        tags.insert(0, parts.pop().lower())
+    return os.path.join(directory, ".".join(parts)), tags, ext
+
+
+def is_target_language_file(file_path, target_lang):
+    """文件名任一语言标签属于目标语言（含 .zh.hi、.chs 等写法）"""
+    target_lang = target_lang.lower()
+    aliases = LANGUAGE_TAG_ALIASES.get(target_lang, {target_lang})
+    _, tags, _ = split_subtitle_name(file_path)
+    return any(tag in aliases for tag in tags)
+
+
 class SubtitleTranslationError(RuntimeError):
     pass
 
@@ -577,6 +624,10 @@ class SubtitleTranslator:
         ]
         return self._chat(messages, parse=lambda reply: reply, timeout=30, retries=retries)
 
+    def _has_translatable_cues(self, content):
+        cues, _ = self._parse_subtitle(content)
+        return any(self._needs_translation(cue.text) for cue in cues)
+
     def _needs_translation(self, text):
         """检查文本是否需要翻译"""
         # 纯数字、符号或音符等没有文字的片段原样保留
@@ -591,9 +642,9 @@ class SubtitleTranslator:
         """翻译字幕文件"""
         state.increment_stat("in_progress")
         try:
-            # 文件名已带目标语言标识时输出路径就是源文件本身，翻译会覆盖原文
+            # 目标语言字幕（如 .zh.hi.srt）的输出路径会与已有译文重名，翻译会覆盖它
             output_path = self._generate_output_path(file_path)
-            if Path(output_path).resolve() == Path(file_path).resolve():
+            if is_target_language_file(file_path, self.target_lang):
                 logger.info("文件名已带目标语言标识，跳过: %s", file_path)
                 state.add_file(file_path, "success", "已是目标语言字幕")
                 return True
@@ -621,6 +672,16 @@ class SubtitleTranslator:
                     file_path, "skipped", "已是双语字幕，跳过翻译", 100
                 )
                 state.add_file(file_path, "success", "已是双语字幕")
+                return True
+
+            # 文件名没有语言标签但内容已是目标语言时，不调用 API，也不写出副本
+            if not self._has_translatable_cues(content):
+                logger.info(f"字幕已是目标语言，跳过: {file_path}")
+                state.add_log("INFO", f"跳过目标语言字幕: {file_path}")
+                state.add_translation_log(
+                    file_path, "skipped", "已是目标语言字幕，跳过翻译", 100
+                )
+                state.add_file(file_path, "success", "已是目标语言字幕")
                 return True
 
             state.add_translation_log(
@@ -734,49 +795,8 @@ class SubtitleTranslator:
                 temporary_path.unlink()
 
     def _generate_output_path(self, file_path):
-        """生成输出文件路径，移除所有语言标识"""
-        # 常见语言代码（包括 hi 等）
-        lang_codes = [
-            ".en",
-            ".eng",
-            ".zh",
-            ".chs",
-            ".cht",
-            ".ja",
-            ".jp",
-            ".ko",
-            ".fr",
-            ".de",
-            ".es",
-            ".it",
-            ".pt",
-            ".ru",
-            ".hi",
-            ".ar",
-            ".th",
-            ".vi",
-        ]
-
-        # 获取文件扩展名
-        for ext in [".srt", ".ass", ".ssa", ".vtt"]:
-            if file_path.endswith(ext):
-                base_path = file_path[: -len(ext)]
-
-                # 循环移除所有语言代码（处理 .en.hi 这种多语言标识）
-                changed = True
-                while changed:
-                    changed = False
-                    for lang in lang_codes:
-                        if base_path.endswith(lang):
-                            base_path = base_path[: -len(lang)]
-                            changed = True
-                            break
-
-                # 添加目标语言标识和原扩展名
-                return f"{base_path}.{self.target_lang}{ext}"
-
-        # 如果没有匹配的扩展名，使用原逻辑
-        base, ext = os.path.splitext(file_path)
+        """生成输出文件路径：去掉文件名末尾的语言和附加标签，加上目标语言"""
+        base, _, ext = split_subtitle_name(file_path)
         return f"{base}.{self.target_lang}{ext}"
 
 
@@ -886,10 +906,9 @@ class SubtitleEventHandler(FileSystemEventHandler):
             self._schedule_file(file_path, delay=retry_delay)
 
     def _is_translated_output(self, file_path):
-        """本服务生成的文件名形如 name.<目标语言>.<扩展名>"""
-        target_lang = getattr(self.translator, "target_lang", "zh").lower()
-        stem = os.path.splitext(os.path.basename(file_path))[0].lower()
-        return stem.endswith(f".{target_lang}")
+        """本服务的输出及其他目标语言字幕（如 .zh.srt、.zh.hi.srt）都不再翻译"""
+        target_lang = getattr(self.translator, "target_lang", "zh")
+        return is_target_language_file(file_path, target_lang)
 
     def _cleanup_processed_locked(self):
         now = time.time()

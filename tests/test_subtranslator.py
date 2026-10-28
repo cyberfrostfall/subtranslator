@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from subtranslator import (
     SubtitleEventHandler,
     SubtitleTranslator,
+    is_target_language_file,
     state,
 )
 
@@ -276,6 +277,48 @@ class SubtitleTranslatorTests(unittest.TestCase):
         finally:
             translator.close()
 
+    def test_target_language_subtitle_does_not_overwrite_existing_output(self):
+        self.translator.translate_batch = Mock()
+        self.translator._wait_for_file_stable = Mock(return_value=True)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            existing = directory / "Movie.zh.srt"
+            existing.write_text("bilingual", encoding="utf-8")
+            source = directory / "Movie.zh.hi.srt"
+            source.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\n[音乐] 你好\n", encoding="utf-8"
+            )
+
+            self.assertTrue(self.translator.translate_subtitle_file(str(source)))
+
+            self.translator.translate_batch.assert_not_called()
+            self.assertEqual(existing.read_text(encoding="utf-8"), "bilingual")
+
+    def test_untagged_subtitle_already_in_target_language_is_not_written(self):
+        self.translator.translate_batch = Mock()
+        self.translator._wait_for_file_stable = Mock(return_value=True)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "Movie.srt"
+            source.write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\n你好\n", encoding="utf-8"
+            )
+
+            self.assertTrue(self.translator.translate_subtitle_file(str(source)))
+
+            self.translator.translate_batch.assert_not_called()
+            self.assertFalse((Path(temporary_directory) / "Movie.zh.srt").exists())
+
+    def test_output_path_strips_all_trailing_tags(self):
+        cases = {
+            "/m/Movie.2024.en.srt": "/m/Movie.2024.zh.srt",
+            "/m/Movie.en.hi.srt": "/m/Movie.zh.srt",
+            "/m/Movie.eng.sdh.forced.ass": "/m/Movie.zh.ass",
+            "/m/Movie.srt": "/m/Movie.zh.srt",
+            "/m/Show.S01E01.vtt": "/m/Show.S01E01.zh.vtt",
+        }
+        for source, expected in cases.items():
+            self.assertEqual(self.translator._generate_output_path(source), expected)
+
     def test_needs_translation_follows_target_language(self):
         self.translator.target_lang = "ja"
         self.assertFalse(self.translator._needs_translation("こんにちは"))
@@ -354,6 +397,30 @@ class SubtitleTranslatorTests(unittest.TestCase):
             self.assertEqual(list(output_path.parent.glob("*.tmp")), [])
 
 
+class TargetLanguageFileTests(unittest.TestCase):
+    def test_any_target_language_tag_is_detected(self):
+        for name in (
+            "Movie.zh.srt",
+            "Movie.zh.hi.srt",
+            "Movie.ZH.SDH.srt",
+            "Movie.chs.srt",
+            "Movie.cht.forced.ass",
+            "Movie.zh-CN.srt",
+            "Movie.hi.zh.srt",
+        ):
+            self.assertTrue(is_target_language_file(f"/m/{name}", "zh"), name)
+
+    def test_other_languages_and_title_words_are_not_detected(self):
+        for name in (
+            "Movie.en.srt",
+            "Movie.en.hi.srt",
+            "Movie.srt",
+            "zh.srt",
+            "Movie.zh.2024.srt",
+        ):
+            self.assertFalse(is_target_language_file(f"/m/{name}", "zh"), name)
+
+
 class SubtitleEventHandlerTests(unittest.TestCase):
     def test_moved_file_is_scheduled(self):
         translator = SimpleNamespace(max_workers=1)
@@ -375,6 +442,7 @@ class SubtitleEventHandlerTests(unittest.TestCase):
         )
         try:
             self.assertTrue(handler._is_translated_output("/media/movie.ja.srt"))
+            self.assertTrue(handler._is_translated_output("/media/movie.jpn.hi.srt"))
             self.assertFalse(handler._is_translated_output("/media/movie.zh.srt"))
             self.assertFalse(handler._is_translated_output("/media/movie.en.srt"))
         finally:
